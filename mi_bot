@@ -1,0 +1,120 @@
+import discord
+from discord.ext import commands
+import sqlite3
+import pytz
+from datetime import datetime
+import os 
+import asyncio 
+
+db_filename = 'responses.db'
+
+if not os.path.isfile(db_filename):
+    conn = sqlite3.connect(db_filename)
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS survey (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        gamertag TEXT,
+                        country_timezone TEXT,
+                        best_time TEXT,
+                        best_time_2 TEXT,
+                        response_time TIMESTAMP
+                    )''')
+   
+    conn.commit()
+    conn.close()
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+conn = sqlite3.connect('responses.db')
+cursor = conn.cursor()
+
+@bot.event
+async def on_ready():
+    print(f'Connected as {bot.user.name}')
+
+@bot.command()
+async def survey(ctx):
+   
+    author = ctx.author
+    await author.send("Please answer the following questions in this DM:\n"
+                      "1. Gamertag (your LastFortress name):")
+    
+    def dm_check(message):
+        return message.author == author and message.channel.type == discord.ChannelType.private
+    
+    try:
+       
+        gamertag_response = await bot.wait_for("message", check=dm_check)
+        gamertag = gamertag_response.content
+
+        await author.send("2. Country (Please tell us your country):")
+        country_timezone = await bot.wait_for("message", check=dm_check)
+        country_timezone = country_timezone.content
+
+        await author.send("3. What time is best for you to play KE or AoW?:")
+        best_time_response = await bot.wait_for("message", check=dm_check)
+        best_time = best_time_response.content
+
+        await author.send("4. Another time that could be best for you to play KE or AoW?:")
+        best_time_2 = await bot.wait_for("message", check=dm_check)
+        best_time_2 = best_time_2.content
+
+        await author.send("Thank you for completing the survey!")
+
+       
+        user_id = author.id
+        response_time = datetime.now(pytz.utc) 
+        cursor.execute("INSERT INTO survey (user_id, gamertag, country_timezone, best_time, best_time_2, response_time) VALUES (?, ?, ?, ?, ?, ?)", (user_id, gamertag, country_timezone, best_time, best_time_2, response_time))
+        conn.commit()
+        
+    except asyncio.TimeoutError:
+        await author.send("You didn't complete the survey within the allocated time. Please run !survey again to start over.")
+    except Exception as e:
+        print(f"Error during database insertion: {e}")
+        
+@bot.command()
+async def survey_results(ctx):
+   
+    cursor.execute("SELECT * FROM survey")
+    rows = cursor.fetchall()
+
+    if not rows:
+        await ctx.send("No survey responses found.")
+        return
+
+   
+    user_responses = {} 
+
+    for row in rows:
+        user_id = row[1] 
+        responses = row[2:] 
+        user_responses.setdefault(user_id, []).append(responses)
+
+   
+    formatted_responses = []
+
+    for user_id, responses in user_responses.items():
+        user = await bot.fetch_user(user_id)
+        if user:
+           
+            response_text = "\n".join([f"Response {i + 1}: {response}" for i, response in enumerate(responses)])
+            formatted_response = f"User: {user.display_name}\n{response_text}"
+            formatted_responses.append(formatted_response)
+
+   
+    for formatted_response in formatted_responses:
+        await ctx.send(formatted_response)
+
+@bot.command()
+async def clear_responses(ctx):
+   
+    cursor.execute("DELETE FROM survey")
+    conn.commit()
+    await ctx.send("Survey responses have been cleared.")
+
+bot.run('')
+
